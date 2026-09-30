@@ -32,7 +32,7 @@ def init_db():
 
 init_db()
 
-# 2. Local Memory Check
+# 2. Local Memory Check (Bypass greetings/identity so it won't return old cached replies)
 def get_cached_reply(user_query):
     bypass_words = ["naam", "name", "who are you", "kaun ho", "hii", "hi", "hello", "hey", "nanogpt"]
     if any(k in user_query.strip().lower() for k in bypass_words):
@@ -49,35 +49,51 @@ def get_cached_reply(user_query):
         pass
     return None
 
-# 3. Chat Completion Function (Active Groq Models Only)
+# 3. Dynamic Active Chat Model Fetcher & Completer
 def ask_groq_auto(prompt):
-    chat_url = "https://api.groq.com/openai/v1/chat/completions"
+    models_url = "https://api.groq.com/openai/v1/models"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0"
     }
 
-    # Sirf 100% active models
-    models_to_try = [
-        "llama-3.1-8b-instant",
-        "llama-3.3-70b-versatile"
-    ]
+    # Fetch currently active models directly from your Groq account
+    active_models = []
+    try:
+        req = urllib.request.Request(models_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            for item in data.get('data', []):
+                mid = item.get('id', '')
+                # Exclude audio, guard, embed, vision models
+                if not any(x in mid.lower() for x in ['whisper', 'guard', 'embed', 'distil', 'vision', 'safeguard', 'tts']):
+                    active_models.append(mid)
+    except Exception as e:
+        return None, f"Models fetch failed: {str(e)}"
 
+    if not active_models:
+        return None, "Aapke account par koi active text model nahi mila."
+
+    chat_url = "https://api.groq.com/openai/v1/chat/completions"
+    
+    # Clean and powerful Language Mirroring Instruction
     system_instruction = (
         "You are SumantX AI, created by Sumant. "
-        "Your only name is SumantX AI. Never say you are NanoGPT or any other AI. "
-        "Strictly detect the language and script of the user and reply in the EXACT SAME language and script: "
-        "- If user speaks Hinglish (Hindi in English letters like 'kaise ho', 'hii'), reply strictly in Hinglish using English letters. Do NOT use Arabic, Persian, or Devanagari script. "
-        "- If user speaks English, reply in English. "
-        "- If user speaks Hindi (Devanagari script), reply in Hindi (Devanagari). "
-        "Keep your reply natural, short (1-2 sentences), and helpful."
+        "Your official and only identity is SumantX AI. Never introduce yourself as NanoGPT or any other AI. "
+        "Strict Language Rule: Detect the language and script of the user message and respond strictly in that SAME language and script. "
+        "- If user speaks in Hinglish (Hindi written using English/Latin alphabet, e.g. 'kaise ho', 'hii', 'kya kar rahe ho'), respond ONLY in Hinglish using English alphabet (A-Z). Never use Arabic, Urdu, or Devanagari. "
+        "- If user speaks in English, respond in English. "
+        "- If user speaks in Hindi (Devanagari script like 'नमस्ते'), respond in Hindi Devanagari. "
+        "- If user speaks Bengali, Marathi, Bhojpuri, etc., reply in that exact language. "
+        "Keep answers short, friendly, and natural (1-2 sentences)."
     )
 
     last_err = ""
-    for model_name in models_to_try:
+    # Try models returned dynamically by Groq until one succeeds
+    for selected_model in active_models:
         payload = {
-            "model": model_name,
+            "model": selected_model,
             "messages": [
                 {"role": "system", "content": system_instruction},
                 {"role": "user", "content": prompt}
