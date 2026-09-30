@@ -1,68 +1,70 @@
 const chatContainer = document.getElementById("chat-container");
-const inputField = document.getElementById("user-input");
+const userInput = document.getElementById("user-input");
+const sendBtn = document.getElementById("send-btn");
 
-// Enter key press support
-inputField.addEventListener("keydown", function (event) {
-  if (event.key === "Enter") {
-    handleSend();
+function addMessage(sender, text, isAi = false) {
+  const msgDiv = document.createElement("div");
+  msgDiv.className = `message ${isAi ? "ai" : "user"}`;
+
+  if (isAi) {
+    const senderTag = document.createElement("div");
+    senderTag.className = "sender-tag";
+    senderTag.innerText = "NanoGPT";
+    msgDiv.appendChild(senderTag);
   }
-});
 
-async function handleSend() {
-  const query = inputField.value.trim();
-  if (!query) return;
+  const textNode = document.createElement("div");
+  textNode.innerText = text;
+  msgDiv.appendChild(textNode);
 
-  // 1. User message bubble
-  createMessageBubble(query, "user");
-  inputField.value = "";
+  chatContainer.appendChild(msgDiv);
+  chatContainer.scrollTop = chatContainer.scrollHeight;
+  return msgDiv;
+}
 
-  // 2. AI thinking state bubble
-  const aiBubble = createMessageBubble("Thinking...", "ai");
+async function sendMessage() {
+  const text = userInput.value.trim();
+  if (!text) return;
+
+  // User ka message dikhayein
+  addMessage("You", text, false);
+  userInput.value = "";
+
+  // Thinking bubble banayein
+  const thinkingMsg = addMessage("NanoGPT", "Thinking...", true);
 
   try {
-    // Localhost Python API call
-    const response = await fetch("http://127.0.0.1:5000/chat", {
+    // Relative path '/chat' use hoga Render ke liye
+    const response = await fetch("/chat", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ prompt: query })
+      body: JSON.stringify({ prompt: text })
     });
 
+    if (!response.ok) {
+      throw new Error(`Server status: ${response.status}`);
+    }
+
     const data = await response.json();
-    updateAiBubble(aiBubble, data.reply);
+    thinkingMsg.querySelector("div:last-child").innerText = data.reply || "No reply received.";
+
   } catch (error) {
-    updateAiBubble(aiBubble, "Backend offline! Termux me API running hona zaroori hai.");
-  }
-
-  scrollToBottom();
-}
-
-function createMessageBubble(text, sender) {
-  const msgDiv = document.createElement("div");
-  msgDiv.className = `message ${sender}`;
-
-  if (sender === "ai") {
-    msgDiv.innerHTML = `
-      <div class="sender-tag">NanoGPT</div>
-      <div class="bubble-text">${text}</div>
-    `;
-  } else {
-    msgDiv.innerHTML = `<div class="bubble-text">${text}</div>`;
-  }
-
-  chatContainer.appendChild(msgDiv);
-  scrollToBottom();
-  return msgDiv;
-}
-
-function updateAiBubble(bubbleElement, newText) {
-  const textDiv = bubbleElement.querySelector(".bubble-text");
-  if (textDiv) {
-    textDiv.innerText = newText;
+    console.error("Chat error:", error);
+    thinkingMsg.querySelector("div:last-child").innerText = "Network ya server error aaya! Thodi der baad try karein.";
   }
 }
 
-function scrollToBottom() {
-  chatContainer.scrollTop = chatContainer.scrollHeight;
+// Button click aur Enter key listener
+if (sendBtn) {
+  sendBtn.addEventListener("click", sendMessage);
+}
+
+if (userInput) {
+  userInput.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+      sendMessage();
+    }
+  });
 }
