@@ -34,6 +34,11 @@ init_db()
 
 # 2. Local Memory Check
 def get_cached_reply(user_query):
+    # Naam wale sawal par purana galat memory cache bypass karein
+    name_keywords = ["naam", "name", "who are you", "kaun ho", "nanogpt"]
+    if any(k in user_query.strip().lower() for k in name_keywords):
+        return None
+
     try:
         with get_db() as conn:
             cursor = conn.cursor()
@@ -73,9 +78,10 @@ def ask_groq_auto(prompt):
     chat_url = "https://api.groq.com/openai/v1/chat/completions"
     last_err = ""
     
-    # Strict Language Matching Instructions
+    # Strict Language Matching Instructions (SumantX AI)
     system_instruction = (
-        "You are NanoGPT, a smart, fast, and helpful AI assistant created by Sumant. "
+        "You are SumantX AI, an advanced, fast, and highly intelligent AI assistant created by Sumant. "
+        "Your official and only name is SumantX AI. Never introduce yourself as NanoGPT or anything else. "
         "STRICT RULE - LANGUAGE & SCRIPT MIRRORING: "
         "Always detect the exact language, dialect, and script used by the user, and reply strictly in the same language. "
         "1. If the user writes in Hinglish (Hindi written in English alphabet, e.g., 'kaise ho', 'kya kar rahe ho'), "
