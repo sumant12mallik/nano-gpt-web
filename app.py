@@ -1,122 +1,116 @@
-import math
-import random
 import os
-from collections import Counter
+import re
+import sqlite3
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-# 1. Dataset
-text_data = [
-    "user hello ai hello how can i help you today",
-    "user what is your name ai my name is nanogpt assistant",
-    "user who are you ai i am an artificial intelligence trained from scratch",
-    "user how are you ai i am running perfectly ready to assist you",
-    "user what is ai ai ai is future of intelligent systems and learning",
-    "user what can you do ai i can process language and generate replies"
-]
+DB_FILE = os.path.join(os.path.dirname(__file__), 'brain.db')
 
-all_words = []
-for sent in text_data:
-    all_words.extend(sent.lower().split())
+def get_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-word_counts = Counter(all_words)
-vocab = sorted(list(set(all_words)))
-vocab_size = len(vocab)
-word_to_ix = {w: i for i, w in enumerate(vocab)}
-ix_to_word = {i: w for i, w in enumerate(vocab)}
+# 1. Database Setup (Zero RAM Usage)
+def init_db():
+    with get_db() as conn:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                question TEXT UNIQUE COLLATE NOCASE,
+                answer TEXT
+            )
+        ''')
+        # Base knowledge default entries
+        conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('hello', 'Hello! How can I assist you today?')")
+        conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('who are you', 'I am NanoGPT, built by Sumant.')")
+        conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('what is ai', 'AI is the simulation of human intelligence by computers.')")
+        conn.commit()
 
-total_tokens = len(all_words)
-novelty_bonus = [0.0] * vocab_size
-for w, idx in word_to_ix.items():
-    freq = word_counts[w] / total_tokens
-    novelty_bonus[idx] = -math.log(freq) * 0.1
+init_db()
 
-pairs = []
-for sent in text_data:
-    words = sent.lower().split()
-    for i in range(len(words) - 1):
-        pairs.append((word_to_ix[words[i]], word_to_ix[words[i+1]]))
+def clean_tokens(text):
+    text = re.sub(r'[^a-zA-Z0-9\s]', '', text.lower())
+    return set(text.split())
 
-# 2. Weights Matrix aur Training
-W = [[random.uniform(-0.1, 0.1) for _ in range(vocab_size)] for _ in range(vocab_size)]
+# 2. Disk-Based Search & Self-Learning
+def search_reply(user_query):
+    query_tokens = clean_tokens(user_query)
+    if not query_tokens:
+        return "Please ask a valid question."
 
-def softmax(logits):
-    max_l = max(logits)
-    exp_vals = [math.exp(x - max_l) for x in logits]
-    s = sum(exp_vals)
-    return [x / s for x in exp_vals]
-
-learning_rate = 1.0
-epochs = 700
-
-print("--- AI Brain Training in Progress... ---")
-for epoch in range(1, epochs + 1):
-    for x, target in pairs:
-        logits = W[x]
-        probs = softmax(logits)
-        for j in range(vocab_size):
-            grad = probs[j]
-            if j == target:
-                grad -= 1.0
-            W[x][j] -= learning_rate * grad
-
-print("--- AI Brain Ready! ---")
-
-# 3. Response Engine
-def generate_reply(user_text, max_new_words=10, rep_penalty=1.4, top_k=2):
-    full_prompt = f"user {user_text.lower()} ai"
-    words = full_prompt.split()
-    generated = list(words)
+    # SQLite se keywords ke base par lightweight filtering
+    first_few = list(query_tokens)[:3]
+    like_clauses = " OR ".join(["question LIKE ?"] * len(first_few))
+    params = [f"%{word}%" for word in first_few]
     
-    for _ in range(max_new_words):
-        last_word = generated[-1]
-        if last_word not in word_to_ix:
-            last_word = random.choice(vocab)
-            
-        x = word_to_ix[last_word]
-        logits = list(W[x])
-        
-        for j in range(vocab_size):
-            logits[j] += 0.2 * novelty_bonus[j]
-        for w in set(generated[-3:]):
-            if w in word_to_ix:
-                logits[word_to_ix[w]] /= rep_penalty
-                
-        probs = softmax(logits)
-        indexed = sorted(list(enumerate(probs)), key=lambda item: item[1], reverse=True)[:top_k]
-        top_indices = [item[0] for item in indexed]
-        top_probs = softmax([item[1] for item in indexed])
-        
-        chosen_id = random.choices(top_indices, weights=top_probs)[0]
-        next_word = ix_to_word[chosen_id]
-        
-        if next_word == "user":
-            break
-        generated.append(next_word)
-        
-    return " ".join(generated[len(words):])
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if like_clauses:
+            cursor.execute(f"SELECT question, answer FROM memory WHERE {like_clauses} LIMIT 50", params)
+        else:
+            cursor.execute("SELECT question, answer FROM memory LIMIT 50")
+        rows = cursor.fetchall()
 
-# 4. Frontend Route (Homepage UI)
+    best_score = 0.0
+    best_reply = None
+
+    for row in rows:
+        q_tokens = clean_tokens(row['question'])
+        if not q_tokens:
+            continue
+        score = len(query_tokens.intersection(q_tokens)) / len(query_tokens.union(q_tokens))
+        if score > best_score:
+            best_score = score
+            best_reply = row['answer']
+
+    if best_reply and best_score >= 0.25:
+        return best_reply
+
+    return "I don't know this yet! Teach me: learn: [Question] | [Answer]"
+
+def save_new_fact(question, answer):
+    q_clean = question.strip().lower()
+    a_clean = answer.strip()
+    try:
+        with get_db() as conn:
+            conn.execute("INSERT INTO memory (question, answer) VALUES (?, ?)", (q_clean, a_clean))
+            conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        # SQLite duplicate question ko automatically block kar dega
+        return False
+
+# 3. Routes
 @app.route('/')
 def home():
     return render_template('index.html')
 
-# 5. API Route (Chat Backend)
 @app.route('/chat', methods=['POST'])
 def chat():
-    data = request.get_json()
-    user_prompt = data.get("prompt", "")
+    data = request.get_json() or {}
+    user_prompt = data.get("prompt", "").strip()
+
     if not user_prompt:
-        return jsonify({"reply": "Please enter a valid message."})
-    
-    bot_reply = generate_reply(user_prompt)
-    if not bot_reply.strip():
-        bot_reply = "I understand, tell me more."
-        
-    return jsonify({"reply": bot_reply})
+        return jsonify({"reply": "Please enter a message."})
+
+    # Self-learning command
+    if user_prompt.lower().startswith("learn:"):
+        try:
+            content = user_prompt[6:].strip()
+            q_part, a_part = content.split("|")
+            success = save_new_fact(q_part, a_part)
+            if success:
+                return jsonify({"reply": f"Learned successfully: '{q_part.strip()}' -> '{a_part.strip()}'"})
+            else:
+                return jsonify({"reply": "I already have this exact concept in my database!"})
+        except Exception:
+            return jsonify({"reply": "Format: learn: Question | Answer"})
+
+    return jsonify({"reply": search_reply(user_prompt)})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
