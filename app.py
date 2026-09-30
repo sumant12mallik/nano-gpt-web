@@ -9,7 +9,6 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-# Direct fallback key
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
 DB_FILE = os.path.join(os.path.dirname(__file__), 'brain.db')
 
@@ -18,6 +17,7 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+# 1. Database Initialize (Persistent & zero RAM load)
 def init_db():
     with get_db() as conn:
         conn.execute('''
@@ -32,6 +32,7 @@ def init_db():
 
 init_db()
 
+# 2. Local Memory Check
 def get_cached_reply(user_query):
     try:
         with get_db() as conn:
@@ -44,6 +45,7 @@ def get_cached_reply(user_query):
         pass
     return None
 
+# 3. Groq API Call with correct active model
 def ask_groq(prompt):
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -52,14 +54,14 @@ def ask_groq(prompt):
         "User-Agent": "Mozilla/5.0"
     }
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": "llama-3.3-70b-versatile",
         "messages": [
             {
                 "role": "system",
                 "content": (
-                    "You are NanoGPT, a helpful and sharp AI assistant created by Sumant. "
-                    "Give direct, factual answers in 1-2 sentences. "
-                    "If asked in Hindi or Hinglish, answer in clear Hindi/Hinglish."
+                    "You are NanoGPT, a sharp, precise, and helpful AI assistant created by Sumant. "
+                    "Provide accurate, direct answers in 1-2 sentences. "
+                    "If asked in Hindi or Hinglish, reply in natural, fluent Hindi/Hinglish."
                 )
             },
             {
@@ -68,12 +70,12 @@ def ask_groq(prompt):
             }
         ],
         "temperature": 0.3,
-        "max_tokens": 120
+        "max_tokens": 150
     }
 
     try:
         req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
-        with urllib.request.urlopen(req, timeout=12) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:
             res_data = json.loads(response.read().decode('utf-8'))
             return res_data['choices'][0]['message']['content'].strip(), None
     except urllib.error.HTTPError as e:
@@ -82,6 +84,7 @@ def ask_groq(prompt):
     except Exception as e:
         return None, f"Error: {str(e)}"
 
+# 4. Auto-Save to SQLite Database
 def save_to_memory(question, answer):
     try:
         with get_db() as conn:
@@ -93,7 +96,7 @@ def save_to_memory(question, answer):
             ''', (question.strip().lower(), answer))
             conn.commit()
     except Exception as e:
-        print(f"DB Error: {e}")
+        print(f"DB Save Error: {e}")
 
 @app.route('/')
 def home():
@@ -105,12 +108,14 @@ def chat():
     user_prompt = data.get("prompt", "").strip()
 
     if not user_prompt:
-        return jsonify({"reply": "Kuch sawaal toh poochhiye!"})
+        return jsonify({"reply": "Kripya koi sawal poochhein."})
 
+    # Pehle memory check
     cached = get_cached_reply(user_prompt)
     if cached:
         return jsonify({"reply": cached})
 
+    # Naya sawal hone par LLM call
     reply, err = ask_groq(user_prompt)
     if reply:
         save_to_memory(user_prompt, reply)
