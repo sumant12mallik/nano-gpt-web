@@ -34,9 +34,9 @@ init_db()
 
 # 2. Local Memory Check
 def get_cached_reply(user_query):
-    # Naam wale sawal par purana galat memory cache bypass karein
-    name_keywords = ["naam", "name", "who are you", "kaun ho", "nanogpt"]
-    if any(k in user_query.strip().lower() for k in name_keywords):
+    # Name aur greetings ko cache se bypass karein taaki galat purana text na uthaye
+    bypass_words = ["naam", "name", "who are you", "kaun ho", "hii", "hi", "hello", "hey"]
+    if any(k in user_query.strip().lower() for k in bypass_words):
         return None
 
     try:
@@ -50,49 +50,37 @@ def get_cached_reply(user_query):
         pass
     return None
 
-# 3. Dynamic Active Chat Model Fetcher
+# 3. Chat Completion Function
 def ask_groq_auto(prompt):
-    models_url = "https://api.groq.com/openai/v1/models"
+    chat_url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0"
     }
 
-    available_models = []
-    try:
-        req = urllib.request.Request(models_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            for item in data.get('data', []):
-                mid = item.get('id', '')
-                # Filter out whisper, guard, vision, and embed models
-                if not any(x in mid.lower() for x in ['whisper', 'guard', 'embed', 'distil', 'vision']):
-                    available_models.append(mid)
-    except Exception as e:
-        return None, f"Models fetch failed: {str(e)}"
+    # Best production chat models in order
+    preferred_models = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768"
+    ]
 
-    if not available_models:
-        return None, "Aapke account par koi chat model nahi mila."
-
-    chat_url = "https://api.groq.com/openai/v1/chat/completions"
-    last_err = ""
-    
-    # Strict Language Matching Instructions (SumantX AI)
+    # Concrete and Strict System Prompt
     system_instruction = (
-        "You are SumantX AI, an advanced, fast, and highly intelligent AI assistant created by Sumant. "
-        "Your official and only name is SumantX AI. Never introduce yourself as NanoGPT or anything else. "
-        "STRICT RULE - LANGUAGE & SCRIPT MIRRORING: "
-        "Always detect the exact language, dialect, and script used by the user, and reply strictly in the same language. "
-        "1. If the user writes in Hinglish (Hindi written in English alphabet, e.g., 'kaise ho', 'kya kar rahe ho'), "
-        "   reply ONLY in Hinglish using the Latin alphabet (A-Z). NEVER use Arabic, Urdu, or Persian script. "
-        "2. If the user writes in English, reply in concise English. "
-        "3. If the user writes in Hindi (Devanagari, e.g., 'आप कैसे हैं'), reply in Devanagari Hindi. "
-        "4. If the user asks in Bhojpuri, Bengali, Marathi, or any regional language, mirror that exact language. "
-        "Keep your response strictly to 1-2 direct and clear sentences."
+        "You are SumantX AI, an intelligent, conversational AI assistant created by Sumant. "
+        "Your name is strictly SumantX AI. Never say you are NanoGPT, Llama, or any other model. "
+        "LANGUAGE MATCHING RULE: "
+        "Strictly identify the language and script of the user's input and reply in that EXACT SAME language and script. "
+        "- If user speaks Hinglish (Hindi words written in English letters like 'kaise ho', 'kya kar rahe ho'), reply ONLY in Hinglish using English letters. Never use Arabic, Urdu, or Devanagari script. "
+        "- If user speaks English, reply in English. "
+        "- If user speaks Hindi (Devanagari script like 'नमस्ते'), reply in Hindi Devanagari script. "
+        "- If user speaks Bengali, Bhojpuri, Punjabi, Gujarati, etc., reply in that specific language. "
+        "Do not provide translations. Keep your answers direct, friendly, and natural."
     )
 
-    for selected_model in available_models:
+    last_err = ""
+    for selected_model in preferred_models:
         payload = {
             "model": selected_model,
             "messages": [
@@ -102,8 +90,8 @@ def ask_groq_auto(prompt):
                 },
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.2,
-            "max_tokens": 150
+            "temperature": 0.3,
+            "max_tokens": 200
         }
 
         try:
@@ -118,7 +106,7 @@ def ask_groq_auto(prompt):
             last_err = str(e)
             continue
 
-    return None, f"Tried models {available_models}. Error: {last_err}"
+    return None, f"Error: {last_err}"
 
 # 4. Auto-Save to SQLite Database
 def save_to_memory(question, answer):
@@ -138,7 +126,6 @@ def save_to_memory(question, answer):
 def home():
     return render_template('index.html')
 
-# Endpoint to monitor your growing dataset
 @app.route('/dataset')
 def show_dataset():
     with get_db() as conn:
@@ -159,12 +146,12 @@ def chat():
     if not user_prompt:
         return jsonify({"reply": "Kuch sawaal poochhein."})
 
-    # Pehle memory check
+    # Memory Cache check
     cached = get_cached_reply(user_prompt)
     if cached:
         return jsonify({"reply": cached})
 
-    # AI se direct reply
+    # AI Model call
     reply, err = ask_groq_auto(user_prompt)
     if reply:
         save_to_memory(user_prompt, reply)
