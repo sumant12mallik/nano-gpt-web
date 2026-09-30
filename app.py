@@ -2,12 +2,14 @@ import os
 import json
 import sqlite3
 import urllib.request
+import urllib.error
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
+# Direct fallback key
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
 DB_FILE = os.path.join(os.path.dirname(__file__), 'brain.db')
 
@@ -30,7 +32,6 @@ def init_db():
 
 init_db()
 
-# Step 1: Memory Check
 def get_cached_reply(user_query):
     try:
         with get_db() as conn:
@@ -43,12 +44,12 @@ def get_cached_reply(user_query):
         pass
     return None
 
-# Step 2: Groq Direct API Call (Zero Extra Dependencies)
 def ask_groq(prompt):
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0"
     }
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -56,10 +57,9 @@ def ask_groq(prompt):
             {
                 "role": "system",
                 "content": (
-                    "You are NanoGPT, a smart, fast and helpful AI assistant made by Sumant. "
-                    "Reply concisely and directly in 1-2 sentences. "
-                    "If user speaks in Hindi/Hinglish, reply in friendly Hindi/Hinglish. "
-                    "Always give exact, updated factual answers."
+                    "You are NanoGPT, a helpful and sharp AI assistant created by Sumant. "
+                    "Give direct, factual answers in 1-2 sentences. "
+                    "If asked in Hindi or Hinglish, answer in clear Hindi/Hinglish."
                 )
             },
             {
@@ -67,20 +67,21 @@ def ask_groq(prompt):
                 "content": prompt
             }
         ],
-        "temperature": 0.5,
-        "max_tokens": 150
+        "temperature": 0.3,
+        "max_tokens": 120
     }
 
     try:
         req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=12) as response:
             res_data = json.loads(response.read().decode('utf-8'))
-            return res_data['choices'][0]['message']['content'].strip()
+            return res_data['choices'][0]['message']['content'].strip(), None
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode('utf-8')
+        return None, f"HTTP {e.code}: {err_msg}"
     except Exception as e:
-        print(f"API Error: {e}")
-        return None
+        return None, f"Error: {str(e)}"
 
-# Step 3: Auto-Save into SQLite
 def save_to_memory(question, answer):
     try:
         with get_db() as conn:
@@ -106,18 +107,16 @@ def chat():
     if not user_prompt:
         return jsonify({"reply": "Kuch sawaal toh poochhiye!"})
 
-    # 1. Pehle database memory check
     cached = get_cached_reply(user_prompt)
     if cached:
         return jsonify({"reply": cached})
 
-    # 2. Direct Groq AI response
-    reply = ask_groq(user_prompt)
+    reply, err = ask_groq(user_prompt)
     if reply:
         save_to_memory(user_prompt, reply)
         return jsonify({"reply": reply})
 
-    return jsonify({"reply": "Server connect nahi ho pa raha hai, kripya 1 minute baad try karein."})
+    return jsonify({"reply": f"Groq Error: {err}"})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
