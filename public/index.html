@@ -4,56 +4,37 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SumantX AI</title>
-    <!-- Public folder wali style.css ko link kiya gaya hai -->
+    <!-- Public folder me rakhi style.css ka link -->
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <header>
-        <h2>SumantX AI</h2>
-    </header>
+    <div class="chat-container">
+        <!-- Header -->
+        <header class="chat-header">
+            <h2>SumantX AI</h2>
+        </header>
 
-    <div class="chat-container" id="chat">
-        <div class="msg bot">Namaste! Main SumantX AI hoon. Mujhse koi bhi sawaal puchiye!</div>
+        <!-- Messages Box -->
+        <div class="chat-box" id="chat-box">
+            <div class="message bot-message">
+                <span>Hello! Main SumantX AI hoon. Mujhse sawal puchhein!</span>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <form class="chat-input-area" id="chat-form" onsubmit="event.preventDefault();">
+            <input 
+                type="text" 
+                id="user-input" 
+                placeholder="Ask anything..." 
+                autocomplete="off"
+                required
+            >
+            <button type="submit" id="send-btn">&#10148;</button>
+        </form>
     </div>
 
-    <div class="input-bar">
-        <input type="text" id="userInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendMsg()">
-        <button onclick="sendMsg()">Send</button>
-    </div>
-
-    <script>
-        async function sendMsg() {
-            const input = document.getElementById('userInput');
-            const chat = document.getElementById('chat');
-            const prompt = input.value.trim();
-            if (!prompt) return;
-
-            // User message screen par show karein
-            chat.innerHTML += `<div class="msg user">${prompt}</div>`;
-            input.value = '';
-            chat.scrollTop = chat.scrollHeight;
-
-            // Loading indicator
-            const loading = document.createElement('div');
-            loading.className = 'msg bot';
-            loading.innerText = 'Soch raha hoon...';
-            chat.appendChild(loading);
-            chat.scrollTop = chat.scrollHeight;
-
-            try {
-                // Render Backend API call
-                const res = await fetch('https://nano-gpt-web.onrender.com/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt: prompt })
-                });
-                const data = await res.json();
-                loading.innerText = data.reply;
-            } catch (err) {
-                loading.innerText = 'Render server se connect nahi ho pa raha hai. Kripya thoda intezaar karein.';
-            }
-            chat.scrollTop = chat.scrollHeight;
-        }
-    </script>
+    <!-- Public folder me rakhi script.js ka link -->
+    <script src="/script.js"></script>
 </body>
 </html>
