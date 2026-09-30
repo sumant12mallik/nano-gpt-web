@@ -14,21 +14,24 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-# 1. Database Setup (Zero RAM Usage)
+# Database initialize
 def init_db():
-    with get_db() as conn:
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS memory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                question TEXT UNIQUE COLLATE NOCASE,
-                answer TEXT
-            )
-        ''')
-        # Base knowledge default entries
-        conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('hello', 'Hello! How can I assist you today?')")
-        conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('who are you', 'I am NanoGPT, built by Sumant.')")
-        conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('what is ai', 'AI is the simulation of human intelligence by computers.')")
-        conn.commit()
+    try:
+        with get_db() as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS memory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    question TEXT UNIQUE COLLATE NOCASE,
+                    answer TEXT
+                )
+            ''')
+            # Base answers
+            conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('hello', 'Hello! Kaise madad kar sakta hoon?')")
+            conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('kaise ho', 'Main badhiya hoon, aap bataiye!')")
+            conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('who are you', 'Main NanoGPT hoon, ek self-learning AI assistant.')")
+            conn.commit()
+    except Exception as e:
+        print(f"DB Init Error: {e}")
 
 init_db()
 
@@ -36,83 +39,86 @@ def clean_tokens(text):
     text = re.sub(r'[^a-zA-Z0-9\s]', '', text.lower())
     return set(text.split())
 
-# 2. Disk-Based Search & Self-Learning
 def search_reply(user_query):
     query_tokens = clean_tokens(user_query)
     if not query_tokens:
-        return "Please ask a valid question."
+        return "Kripya koi sawal poochhein."
 
-    # SQLite se keywords ke base par lightweight filtering
-    first_few = list(query_tokens)[:3]
-    like_clauses = " OR ".join(["question LIKE ?"] * len(first_few))
-    params = [f"%{word}%" for word in first_few]
-    
-    with get_db() as conn:
-        cursor = conn.cursor()
-        if like_clauses:
-            cursor.execute(f"SELECT question, answer FROM memory WHERE {like_clauses} LIMIT 50", params)
-        else:
-            cursor.execute("SELECT question, answer FROM memory LIMIT 50")
-        rows = cursor.fetchall()
-
-    best_score = 0.0
-    best_reply = None
-
-    for row in rows:
-        q_tokens = clean_tokens(row['question'])
-        if not q_tokens:
-            continue
-        score = len(query_tokens.intersection(q_tokens)) / len(query_tokens.union(q_tokens))
-        if score > best_score:
-            best_score = score
-            best_reply = row['answer']
-
-    if best_reply and best_score >= 0.25:
-        return best_reply
-
-    return "I don't know this yet! Teach me: learn: [Question] | [Answer]"
-
-def save_new_fact(question, answer):
-    q_clean = question.strip().lower()
-    a_clean = answer.strip()
     try:
         with get_db() as conn:
-            conn.execute("INSERT INTO memory (question, answer) VALUES (?, ?)", (q_clean, a_clean))
+            cursor = conn.cursor()
+            first_few = list(query_tokens)[:3]
+            like_clauses = " OR ".join(["question LIKE ?"] * len(first_few))
+            params = [f"%{word}%" for word in first_few]
+            
+            if like_clauses:
+                cursor.execute(f"SELECT question, answer FROM memory WHERE {like_clauses} LIMIT 50", params)
+            else:
+                cursor.execute("SELECT question, answer FROM memory LIMIT 50")
+            rows = cursor.fetchall()
+
+        best_score = 0.0
+        best_reply = None
+
+        for row in rows:
+            q_tokens = clean_tokens(row['question'])
+            if not q_tokens:
+                continue
+            score = len(query_tokens.intersection(q_tokens)) / len(query_tokens.union(q_tokens))
+            if score > best_score:
+                best_score = score
+                best_reply = row['answer']
+
+        if best_reply and best_score >= 0.25:
+            return best_reply
+
+    except Exception as e:
+        print(f"Search error: {e}")
+
+    return "Mujhe ye abhi nahi pata! Mujhe sikhane ke liye type karein: learn: sawal | jawab"
+
+def save_new_fact(question, answer):
+    try:
+        with get_db() as conn:
+            conn.execute("INSERT INTO memory (question, answer) VALUES (?, ?)", (question.strip().lower(), answer.strip()))
             conn.commit()
         return True
     except sqlite3.IntegrityError:
-        # SQLite duplicate question ko automatically block kar dega
+        return False
+    except Exception:
         return False
 
-# 3. Routes
 @app.route('/')
 def home():
     return render_template('index.html')
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    data = request.get_json() or {}
-    user_prompt = data.get("prompt", "").strip()
+    try:
+        data = request.get_json() or {}
+        user_prompt = data.get("prompt", "").strip()
 
-    if not user_prompt:
-        return jsonify({"reply": "Please enter a message."})
+        if not user_prompt:
+            return jsonify({"reply": "Kuch type toh kijiye!"})
 
-    # Self-learning command
-    if user_prompt.lower().startswith("learn:"):
-        try:
-            content = user_prompt[6:].strip()
-            q_part, a_part = content.split("|")
-            success = save_new_fact(q_part, a_part)
-            if success:
-                return jsonify({"reply": f"Learned successfully: '{q_part.strip()}' -> '{a_part.strip()}'"})
-            else:
-                return jsonify({"reply": "I already have this exact concept in my database!"})
-        except Exception:
-            return jsonify({"reply": "Format: learn: Question | Answer"})
+        if user_prompt.lower().startswith("learn:"):
+            try:
+                content = user_prompt[6:].strip()
+                q_part, a_part = content.split("|")
+                if save_new_fact(q_part, a_part):
+                    return jsonify({"reply": f"Maine seekh liya: '{q_part.strip()}' -> '{a_part.strip()}'"})
+                else:
+                    return jsonify({"reply": "Ye sawal pehle se meri memory me hai!"})
+            except Exception:
+                return jsonify({"reply": "Format galat hai! Aise sikhayein: learn: sawal | jawab"})
 
-    return jsonify({"reply": search_reply(user_prompt)})
+        reply = search_reply(user_prompt)
+        return jsonify({"reply": reply})
+
+    except Exception as e:
+        return jsonify({"reply": f"System error: {str(e)}"})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
-    
+            
