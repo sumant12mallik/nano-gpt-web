@@ -1,16 +1,14 @@
 import os
+import json
 import sqlite3
+import urllib.request
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from groq import Groq
 
 app = Flask(__name__)
 CORS(app)
 
-# Groq API Client
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
-client = Groq(api_key=GROQ_API_KEY)
-
 DB_FILE = os.path.join(os.path.dirname(__file__), 'brain.db')
 
 def get_db():
@@ -18,7 +16,6 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-# Database Initialize
 def init_db():
     with get_db() as conn:
         conn.execute('''
@@ -33,7 +30,7 @@ def init_db():
 
 init_db()
 
-# Step 1: Database Memory Check (Superfast response bina API call)
+# Step 1: Memory Check
 def get_cached_reply(user_query):
     try:
         with get_db() as conn:
@@ -46,33 +43,44 @@ def get_cached_reply(user_query):
         pass
     return None
 
-# Step 2: Smart & Precise AI Response (Groq Llama-3.1)
-def generate_smart_reply(prompt):
-    try:
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are NanoGPT, an intelligent, fast, and helpful AI assistant created by Sumant. "
-                        "Give precise and direct answers in 1-2 short sentences. "
-                        "If the user asks in Hindi or Hinglish, reply in clear, friendly conversational Hindi/Hinglish. "
-                        "Never give long essays or unnecessary definitions unless asked."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            model="llama-3.1-8b-instant",
-        )
-        return chat_completion.choices[0].message.content.strip()
-    except Exception as e:
-        print(f"Groq API Error: {e}")
-        return "Abhi network issue hai, kripya thodi der baad dobara puchein."
+# Step 2: Groq Direct API Call (Zero Extra Dependencies)
+def ask_groq(prompt):
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are NanoGPT, a smart, fast and helpful AI assistant made by Sumant. "
+                    "Reply concisely and directly in 1-2 sentences. "
+                    "If user speaks in Hindi/Hinglish, reply in friendly Hindi/Hinglish. "
+                    "Always give exact, updated factual answers."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.5,
+        "max_tokens": 150
+    }
 
-# Step 3: Self-Learning - Memory me Auto-Save / Update
+    try:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            return res_data['choices'][0]['message']['content'].strip()
+    except Exception as e:
+        print(f"API Error: {e}")
+        return None
+
+# Step 3: Auto-Save into SQLite
 def save_to_memory(question, answer):
     try:
         with get_db() as conn:
@@ -84,7 +92,7 @@ def save_to_memory(question, answer):
             ''', (question.strip().lower(), answer))
             conn.commit()
     except Exception as e:
-        print(f"Memory Save Error: {e}")
+        print(f"DB Error: {e}")
 
 @app.route('/')
 def home():
@@ -96,21 +104,20 @@ def chat():
     user_prompt = data.get("prompt", "").strip()
 
     if not user_prompt:
-        return jsonify({"reply": "Kuch toh puchiye!"})
+        return jsonify({"reply": "Kuch sawaal toh poochhiye!"})
 
-    # Pehle memory check (agar pehle se pata hai to instant bol dega)
+    # 1. Pehle database memory check
     cached = get_cached_reply(user_prompt)
     if cached:
         return jsonify({"reply": cached})
 
-    # Agar naya sawal hai to Groq AI se direct sharp jawab
-    smart_reply = generate_smart_reply(user_prompt)
-    
-    # Aur us nayi jaankari ko memory me auto-save kar lega
-    if smart_reply and "issue" not in smart_reply:
-        save_to_memory(user_prompt, smart_reply)
+    # 2. Direct Groq AI response
+    reply = ask_groq(user_prompt)
+    if reply:
+        save_to_memory(user_prompt, reply)
+        return jsonify({"reply": reply})
 
-    return jsonify({"reply": smart_reply})
+    return jsonify({"reply": "Server connect nahi ho pa raha hai, kripya 1 minute baad try karein."})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
