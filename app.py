@@ -17,7 +17,6 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-# 1. Database Initialize
 def init_db():
     with get_db() as conn:
         conn.execute('''
@@ -32,7 +31,6 @@ def init_db():
 
 init_db()
 
-# 2. Local Memory Check
 def get_cached_reply(user_query):
     try:
         with get_db() as conn:
@@ -45,71 +43,63 @@ def get_cached_reply(user_query):
         pass
     return None
 
-# 3. Valid Chat Model Finder (Guard/Whisper hatakar sirf real Chat LLM)
-def get_active_chat_model():
-    url = "https://api.groq.com/openai/v1/models"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "User-Agent": "Mozilla/5.0"
-    }
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=5) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            models = [m['id'] for m in res_data.get('data', [])]
-            # Prompt-guard, whisper aur embed ko filter karein
-            for mid in models:
-                mid_lower = mid.lower()
-                if "guard" not in mid_lower and "whisper" not in mid_lower and "embed" not in mid_lower:
-                    if "llama" in mid_lower or "mixtral" in mid_lower or "gemma" in mid_lower:
-                        return mid
-    except Exception as e:
-        print(f"Model fetch error: {e}")
-    
-    return "llama-3.1-8b-instant"
-
-# 4. Groq Chat API Call
-def ask_groq(prompt):
-    active_model = get_active_chat_model()
-    url = "https://api.groq.com/openai/v1/chat/completions"
+# Groq se seedha active models ki list lena aur pehle working model se jawab mangwana
+def ask_groq_auto(prompt):
+    # 1. Models list mangwao
+    models_url = "https://api.groq.com/openai/v1/models"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0"
     }
 
-    payload = {
-        "model": active_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are NanoGPT, a sharp, precise, and helpful AI assistant created by Sumant. "
-                    "Provide accurate, direct answers in 1-2 short sentences. "
-                    "If asked in Hindi or Hinglish, reply in natural, fluent Hindi/Hinglish."
-                )
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        "temperature": 0.3,
-        "max_tokens": 150
-    }
-
+    available_models = []
     try:
-        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
-        with urllib.request.urlopen(req, timeout=12) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            return res_data['choices'][0]['message']['content'].strip(), None
-    except urllib.error.HTTPError as e:
-        err_msg = e.read().decode('utf-8')
-        return None, f"Model '{active_model}' error: {err_msg}"
+        req = urllib.request.Request(models_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            for item in data.get('data', []):
+                mid = item.get('id', '')
+                # audio/guard models hata kar
+                if not any(x in mid.lower() for x in ['whisper', 'guard', 'embed', 'distil']):
+                    available_models.append(mid)
     except Exception as e:
-        return None, f"Error: {str(e)}"
+        return None, f"Models fetch failed: {str(e)}"
 
-# 5. Auto-Save to SQLite Database
+    if not available_models:
+        return None, "Aapke account par koi chat model nahi mila."
+
+    # 2. Jo models mile, unme se pehle working wale se reply generate karwao
+    chat_url = "https://api.groq.com/openai/v1/chat/completions"
+    last_err = ""
+    
+    for selected_model in available_models:
+        payload = {
+            "model": selected_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are NanoGPT, a sharp AI assistant made by Sumant. Reply in 1-2 direct sentences in clear Hindi/Hinglish."
+                },
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 120
+        }
+
+        try:
+            chat_req = urllib.request.Request(chat_url, data=json.dumps(payload).encode('utf-8'), headers=headers)
+            with urllib.request.urlopen(chat_req, timeout=12) as response:
+                res_data = json.loads(response.read().decode('utf-8'))
+                return res_data['choices'][0]['message']['content'].strip(), None
+        except urllib.error.HTTPError as e:
+            last_err = f"{selected_model}: {e.read().decode('utf-8')}"
+            continue
+        except Exception as e:
+            last_err = str(e)
+            continue
+
+    return None, f"Tried models {available_models}. Error: {last_err}"
+
 def save_to_memory(question, answer):
     try:
         with get_db() as conn:
@@ -133,22 +123,20 @@ def chat():
     user_prompt = data.get("prompt", "").strip()
 
     if not user_prompt:
-        return jsonify({"reply": "Kripya koi sawal poochhein."})
+        return jsonify({"reply": "Kuch sawaal poochhein."})
 
-    # 1. Pehle memory check
     cached = get_cached_reply(user_prompt)
     if cached:
         return jsonify({"reply": cached})
 
-    # 2. Chat LLM call
-    reply, err = ask_groq(user_prompt)
+    reply, err = ask_groq_auto(user_prompt)
     if reply:
         save_to_memory(user_prompt, reply)
         return jsonify({"reply": reply})
 
-    return jsonify({"reply": f"Groq Error: {err}"})
+    return jsonify({"reply": f"Info: {err}"})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
-    
+                    
