@@ -1,9 +1,11 @@
 import os
 import re
+import json
 import sqlite3
+import urllib.request
+import urllib.parse
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from duckduckgo_search import DDGS
 
 app = Flask(__name__)
 CORS(app)
@@ -15,7 +17,6 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-# Database Init
 def init_db():
     with get_db() as conn:
         conn.execute('''
@@ -26,6 +27,10 @@ def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        # Default conversational replies
+        conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('hii', 'Hello! Kaise madad kar sakta hoon?')")
+        conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('kaise ho', 'Main badhiya hoon, aap bataiye!')")
+        conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('who are you', 'Main NanoGPT hoon, ek self-learning AI assistant.')")
         conn.commit()
 
 init_db()
@@ -34,7 +39,7 @@ def clean_tokens(text):
     text = re.sub(r'[^a-zA-Z0-9\s]', '', text.lower())
     return set(text.split())
 
-# 1. Database se best match dhundna
+# 1. Local Memory Search
 def search_local_memory(user_query):
     query_tokens = clean_tokens(user_query)
     if not query_tokens:
@@ -64,42 +69,65 @@ def search_local_memory(user_query):
             best_score = score
             best_reply = row['answer']
 
-    if best_reply and best_score >= 0.45:
+    if best_reply and best_score >= 0.40:
         return best_reply
     return None
 
-# 2. Web Search Engine (Automatic Internet Lookup)
-def search_web_and_summarize(query):
+# 2. Free & Unblocked Web Search (Wikipedia + Instant API)
+def search_web(query):
+    # Stop words hatakar main topic nikalna (jaise 'india president')
+    stop_words = {"ka", "ki", "ke", "hai", "kon", "kaun", "kya", "batao", "who", "is", "the", "of", "what"}
+    words = [w for w in re.sub(r'[^a-zA-Z0-9\s]', '', query.lower()).split() if w not in stop_words]
+    search_term = " ".join(words) if words else query
+
+    headers = {'User-Agent': 'NanoGPT-AI/1.0 (Educational Project)'}
+
+    # Step A: Direct Wikipedia Summary API (Never blocked on Render)
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=2))
-            if results and len(results) > 0:
-                body = results[0].get('body', '')
-                if body:
-                    # Precise aur concise answer
-                    sentences = re.split(r'(?<=[.!?]) +', body)
-                    short_answer = " ".join(sentences[:2]).strip()
-                    return short_answer
+        encoded = urllib.parse.quote(search_term)
+        wiki_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded}"
+        req = urllib.request.Request(wiki_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            extract = data.get("extract")
+            if extract:
+                sentences = re.split(r'(?<=[.!?]) +', extract)
+                return " ".join(sentences[:2]).strip()
+    except Exception:
+        pass
+
+    # Step B: Wikipedia Search Query (Agar exact title na mile)
+    try:
+        search_api = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(search_term)}&utf8=&format=json"
+        req = urllib.request.Request(search_api, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            results = data.get("query", {}).get("search", [])
+            if results:
+                snippet = results[0].get("snippet", "")
+                # HTML tags hatana
+                clean_snippet = re.sub(r'<[^>]+>', '', snippet)
+                if clean_snippet:
+                    return f"{results[0].get('title')}: {clean_snippet}..."
     except Exception as e:
-        print(f"Web Search Error: {e}")
+        print(f"Search API error: {e}")
+
     return None
 
-# 3. Memory me Insert ya Naye Data se Update karna
-def save_or_update_memory(question, answer):
+# 3. Memory Update
+def save_to_memory(question, answer):
     try:
         with get_db() as conn:
             conn.execute('''
-                INSERT INTO memory (question, answer) 
-                VALUES (?, ?)
+                INSERT INTO memory (question, answer) VALUES (?, ?)
                 ON CONFLICT(question) DO UPDATE SET 
                     answer = excluded.answer,
                     updated_at = CURRENT_TIMESTAMP
             ''', (question.strip().lower(), answer.strip()))
             conn.commit()
     except Exception as e:
-        print(f"DB Update Error: {e}")
+        print(f"Memory Save Error: {e}")
 
-# Routes
 @app.route('/')
 def home():
     return render_template('index.html')
@@ -110,21 +138,20 @@ def chat():
     user_prompt = data.get("prompt", "").strip()
 
     if not user_prompt:
-        return jsonify({"reply": "Kuch sawaal toh puchiye!"})
+        return jsonify({"reply": "Kuch toh puchiye!"})
 
-    # Step 1: Local memory check
+    # 1. Local Memory Check
     local_reply = search_local_memory(user_prompt)
     if local_reply:
         return jsonify({"reply": local_reply})
 
-    # Step 2: Agar nahi mila toh internet se auto-search
-    web_reply = search_web_and_summarize(user_prompt)
+    # 2. Internet Search
+    web_reply = search_web(user_prompt)
     if web_reply:
-        # Step 3: Nayi jaankari ko memory me auto-save ya update karna
-        save_or_update_memory(user_prompt, web_reply)
+        save_to_memory(user_prompt, web_reply)
         return jsonify({"reply": web_reply})
 
-    return jsonify({"reply": "Mujhe iska uttar internet par nahi mila, kripya thoda alag shabdon me puchein."})
+    return jsonify({"reply": "Mujhe iska jawab nahi mila, kripya thoda alag shabdon me puchein."})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
