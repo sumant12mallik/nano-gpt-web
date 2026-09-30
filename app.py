@@ -34,8 +34,7 @@ init_db()
 
 # 2. Local Memory Check
 def get_cached_reply(user_query):
-    # Name aur greetings ko cache se bypass karein taaki galat purana text na uthaye
-    bypass_words = ["naam", "name", "who are you", "kaun ho", "hii", "hi", "hello", "hey"]
+    bypass_words = ["naam", "name", "who are you", "kaun ho", "hii", "hi", "hello", "hey", "nanogpt"]
     if any(k in user_query.strip().lower() for k in bypass_words):
         return None
 
@@ -50,7 +49,7 @@ def get_cached_reply(user_query):
         pass
     return None
 
-# 3. Chat Completion Function
+# 3. Chat Completion Function (Active Groq Models Only)
 def ask_groq_auto(prompt):
     chat_url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -59,39 +58,32 @@ def ask_groq_auto(prompt):
         "User-Agent": "Mozilla/5.0"
     }
 
-    # Best production chat models in order
-    preferred_models = [
-        "llama-3.3-70b-versatile",
+    # Sirf 100% active models
+    models_to_try = [
         "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768"
+        "llama-3.3-70b-versatile"
     ]
 
-    # Concrete and Strict System Prompt
     system_instruction = (
-        "You are SumantX AI, an intelligent, conversational AI assistant created by Sumant. "
-        "Your name is strictly SumantX AI. Never say you are NanoGPT, Llama, or any other model. "
-        "LANGUAGE MATCHING RULE: "
-        "Strictly identify the language and script of the user's input and reply in that EXACT SAME language and script. "
-        "- If user speaks Hinglish (Hindi words written in English letters like 'kaise ho', 'kya kar rahe ho'), reply ONLY in Hinglish using English letters. Never use Arabic, Urdu, or Devanagari script. "
+        "You are SumantX AI, created by Sumant. "
+        "Your only name is SumantX AI. Never say you are NanoGPT or any other AI. "
+        "Strictly detect the language and script of the user and reply in the EXACT SAME language and script: "
+        "- If user speaks Hinglish (Hindi in English letters like 'kaise ho', 'hii'), reply strictly in Hinglish using English letters. Do NOT use Arabic, Persian, or Devanagari script. "
         "- If user speaks English, reply in English. "
-        "- If user speaks Hindi (Devanagari script like 'नमस्ते'), reply in Hindi Devanagari script. "
-        "- If user speaks Bengali, Bhojpuri, Punjabi, Gujarati, etc., reply in that specific language. "
-        "Do not provide translations. Keep your answers direct, friendly, and natural."
+        "- If user speaks Hindi (Devanagari script), reply in Hindi (Devanagari). "
+        "Keep your reply natural, short (1-2 sentences), and helpful."
     )
 
     last_err = ""
-    for selected_model in preferred_models:
+    for model_name in models_to_try:
         payload = {
-            "model": selected_model,
+            "model": model_name,
             "messages": [
-                {
-                    "role": "system",
-                    "content": system_instruction
-                },
+                {"role": "system", "content": system_instruction},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.3,
-            "max_tokens": 200
+            "max_tokens": 150
         }
 
         try:
@@ -100,7 +92,7 @@ def ask_groq_auto(prompt):
                 res_data = json.loads(response.read().decode('utf-8'))
                 return res_data['choices'][0]['message']['content'].strip(), None
         except urllib.error.HTTPError as e:
-            last_err = f"{selected_model}: {e.read().decode('utf-8')}"
+            last_err = e.read().decode('utf-8')
             continue
         except Exception as e:
             last_err = str(e)
@@ -146,12 +138,10 @@ def chat():
     if not user_prompt:
         return jsonify({"reply": "Kuch sawaal poochhein."})
 
-    # Memory Cache check
     cached = get_cached_reply(user_prompt)
     if cached:
         return jsonify({"reply": cached})
 
-    # AI Model call
     reply, err = ask_groq_auto(user_prompt)
     if reply:
         save_to_memory(user_prompt, reply)
