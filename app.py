@@ -1,14 +1,15 @@
 import os
-import re
-import json
 import sqlite3
-import urllib.request
-import urllib.parse
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
+from groq import Groq
 
 app = Flask(__name__)
 CORS(app)
+
+# Groq API Client
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+client = Groq(api_key=GROQ_API_KEY)
 
 DB_FILE = os.path.join(os.path.dirname(__file__), 'brain.db')
 
@@ -17,6 +18,7 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+# Database Initialize
 def init_db():
     with get_db() as conn:
         conn.execute('''
@@ -27,94 +29,50 @@ def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        # Default conversational replies
-        conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('hii', 'Hello! Kaise madad kar sakta hoon?')")
-        conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('kaise ho', 'Main badhiya hoon, aap bataiye!')")
-        conn.execute("INSERT OR IGNORE INTO memory (question, answer) VALUES ('who are you', 'Main NanoGPT hoon, ek self-learning AI assistant.')")
         conn.commit()
 
 init_db()
 
-def clean_tokens(text):
-    text = re.sub(r'[^a-zA-Z0-9\s]', '', text.lower())
-    return set(text.split())
-
-# 1. Local Memory Search
-def search_local_memory(user_query):
-    query_tokens = clean_tokens(user_query)
-    if not query_tokens:
-        return None
-
-    first_few = list(query_tokens)[:3]
-    like_clauses = " OR ".join(["question LIKE ?"] * len(first_few))
-    params = [f"%{word}%" for word in first_few]
-
-    with get_db() as conn:
-        cursor = conn.cursor()
-        if like_clauses:
-            cursor.execute(f"SELECT question, answer FROM memory WHERE {like_clauses} LIMIT 30", params)
-        else:
-            cursor.execute("SELECT question, answer FROM memory LIMIT 30")
-        rows = cursor.fetchall()
-
-    best_score = 0.0
-    best_reply = None
-
-    for row in rows:
-        q_tokens = clean_tokens(row['question'])
-        if not q_tokens:
-            continue
-        score = len(query_tokens.intersection(q_tokens)) / len(query_tokens.union(q_tokens))
-        if score > best_score:
-            best_score = score
-            best_reply = row['answer']
-
-    if best_reply and best_score >= 0.40:
-        return best_reply
-    return None
-
-# 2. Free & Unblocked Web Search (Wikipedia + Instant API)
-def search_web(query):
-    # Stop words hatakar main topic nikalna (jaise 'india president')
-    stop_words = {"ka", "ki", "ke", "hai", "kon", "kaun", "kya", "batao", "who", "is", "the", "of", "what"}
-    words = [w for w in re.sub(r'[^a-zA-Z0-9\s]', '', query.lower()).split() if w not in stop_words]
-    search_term = " ".join(words) if words else query
-
-    headers = {'User-Agent': 'NanoGPT-AI/1.0 (Educational Project)'}
-
-    # Step A: Direct Wikipedia Summary API (Never blocked on Render)
+# Step 1: Database Memory Check (Superfast response bina API call)
+def get_cached_reply(user_query):
     try:
-        encoded = urllib.parse.quote(search_term)
-        wiki_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded}"
-        req = urllib.request.Request(wiki_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode())
-            extract = data.get("extract")
-            if extract:
-                sentences = re.split(r'(?<=[.!?]) +', extract)
-                return " ".join(sentences[:2]).strip()
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT answer FROM memory WHERE question = ? LIMIT 1", (user_query.strip().lower(),))
+            row = cursor.fetchone()
+            if row:
+                return row['answer']
     except Exception:
         pass
-
-    # Step B: Wikipedia Search Query (Agar exact title na mile)
-    try:
-        search_api = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(search_term)}&utf8=&format=json"
-        req = urllib.request.Request(search_api, headers=headers)
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode())
-            results = data.get("query", {}).get("search", [])
-            if results:
-                snippet = results[0].get("snippet", "")
-                # HTML tags hatana
-                clean_snippet = re.sub(r'<[^>]+>', '', snippet)
-                if clean_snippet:
-                    return f"{results[0].get('title')}: {clean_snippet}..."
-    except Exception as e:
-        print(f"Search API error: {e}")
-
     return None
 
-# 3. Memory Update
+# Step 2: Smart & Precise AI Response (Groq Llama-3.1)
+def generate_smart_reply(prompt):
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are NanoGPT, an intelligent, fast, and helpful AI assistant created by Sumant. "
+                        "Give precise and direct answers in 1-2 short sentences. "
+                        "If the user asks in Hindi or Hinglish, reply in clear, friendly conversational Hindi/Hinglish. "
+                        "Never give long essays or unnecessary definitions unless asked."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            model="llama-3.1-8b-instant",
+        )
+        return chat_completion.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"Groq API Error: {e}")
+        return "Abhi network issue hai, kripya thodi der baad dobara puchein."
+
+# Step 3: Self-Learning - Memory me Auto-Save / Update
 def save_to_memory(question, answer):
     try:
         with get_db() as conn:
@@ -123,7 +81,7 @@ def save_to_memory(question, answer):
                 ON CONFLICT(question) DO UPDATE SET 
                     answer = excluded.answer,
                     updated_at = CURRENT_TIMESTAMP
-            ''', (question.strip().lower(), answer.strip()))
+            ''', (question.strip().lower(), answer))
             conn.commit()
     except Exception as e:
         print(f"Memory Save Error: {e}")
@@ -140,18 +98,19 @@ def chat():
     if not user_prompt:
         return jsonify({"reply": "Kuch toh puchiye!"})
 
-    # 1. Local Memory Check
-    local_reply = search_local_memory(user_prompt)
-    if local_reply:
-        return jsonify({"reply": local_reply})
+    # Pehle memory check (agar pehle se pata hai to instant bol dega)
+    cached = get_cached_reply(user_prompt)
+    if cached:
+        return jsonify({"reply": cached})
 
-    # 2. Internet Search
-    web_reply = search_web(user_prompt)
-    if web_reply:
-        save_to_memory(user_prompt, web_reply)
-        return jsonify({"reply": web_reply})
+    # Agar naya sawal hai to Groq AI se direct sharp jawab
+    smart_reply = generate_smart_reply(user_prompt)
+    
+    # Aur us nayi jaankari ko memory me auto-save kar lega
+    if smart_reply and "issue" not in smart_reply:
+        save_to_memory(user_prompt, smart_reply)
 
-    return jsonify({"reply": "Mujhe iska jawab nahi mila, kripya thoda alag shabdon me puchein."})
+    return jsonify({"reply": smart_reply})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
