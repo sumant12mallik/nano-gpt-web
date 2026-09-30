@@ -12,12 +12,20 @@ CORS(app)
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
 DB_FILE = os.path.join(os.path.dirname(__file__), 'brain.db')
 
+# Groq ke active models ki list (ek fail hua toh turant agla chalega)
+ACTIVE_MODELS = [
+    "llama-3.2-3b-preview",
+    "llama-3.2-1b-preview",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it"
+]
+
 def get_db():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
 
-# 1. Database Initialize (Persistent & zero RAM load)
+# 1. Database Initialize
 def init_db():
     with get_db() as conn:
         conn.execute('''
@@ -45,7 +53,7 @@ def get_cached_reply(user_query):
         pass
     return None
 
-# 3. Groq API Call with correct active model
+# 3. Groq API Call with Multi-Model Fallback
 def ask_groq(prompt):
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -53,36 +61,44 @@ def ask_groq(prompt):
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0"
     }
-    payload = {
-        "model": "llama3-8b-8192",
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are NanoGPT, a sharp, precise, and helpful AI assistant created by Sumant. "
-                    "Provide accurate, direct answers in 1-2 sentences. "
-                    "If asked in Hindi or Hinglish, reply in natural, fluent Hindi/Hinglish."
-                )
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        "temperature": 0.3,
-        "max_tokens": 150
-    }
 
-    try:
-        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
-        with urllib.request.urlopen(req, timeout=15) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            return res_data['choices'][0]['message']['content'].strip(), None
-    except urllib.error.HTTPError as e:
-        err_msg = e.read().decode('utf-8')
-        return None, f"HTTP {e.code}: {err_msg}"
-    except Exception as e:
-        return None, f"Error: {str(e)}"
+    last_error = None
+
+    for model_name in ACTIVE_MODELS:
+        payload = {
+            "model": model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are NanoGPT, a sharp, precise, and helpful AI assistant created by Sumant. "
+                        "Provide accurate, direct answers in 1-2 sentences. "
+                        "If asked in Hindi or Hinglish, reply in natural, fluent Hindi/Hinglish."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.3,
+            "max_tokens": 150
+        }
+
+        try:
+            req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
+            with urllib.request.urlopen(req, timeout=12) as response:
+                res_data = json.loads(response.read().decode('utf-8'))
+                return res_data['choices'][0]['message']['content'].strip(), None
+        except urllib.error.HTTPError as e:
+            err_msg = e.read().decode('utf-8')
+            last_error = f"{model_name} failed: {err_msg}"
+            continue
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return None, last_error
 
 # 4. Auto-Save to SQLite Database
 def save_to_memory(question, answer):
