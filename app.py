@@ -12,14 +12,6 @@ CORS(app)
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
 DB_FILE = os.path.join(os.path.dirname(__file__), 'brain.db')
 
-# Groq ke active models ki list (ek fail hua toh turant agla chalega)
-ACTIVE_MODELS = [
-    "llama-3.2-3b-preview",
-    "llama-3.2-1b-preview",
-    "mixtral-8x7b-32768",
-    "gemma2-9b-it"
-]
-
 def get_db():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
@@ -53,8 +45,29 @@ def get_cached_reply(user_query):
         pass
     return None
 
-# 3. Groq API Call with Multi-Model Fallback
+# 3. Live Active Models Fetcher (Kabhi Decommission Error nahi aayega)
+def get_active_model():
+    url = "https://api.groq.com/openai/v1/models"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "User-Agent": "Mozilla/5.0"
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            models = [m['id'] for m in res_data.get('data', []) if 'whisper' not in m['id']]
+            # Pehla text-chat model chunein
+            if models:
+                return models[0]
+    except Exception as e:
+        print(f"Model list error: {e}")
+    # Fallback agar fetch na ho paye
+    return "llama-3.1-8b-instant"
+
+# 4. Groq API Call
 def ask_groq(prompt):
+    active_model = get_active_model()
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -62,45 +75,38 @@ def ask_groq(prompt):
         "User-Agent": "Mozilla/5.0"
     }
 
-    last_error = None
+    payload = {
+        "model": active_model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are NanoGPT, a sharp, precise, and helpful AI assistant created by Sumant. "
+                    "Provide accurate, direct answers in 1-2 sentences. "
+                    "If asked in Hindi or Hinglish, reply in natural, fluent Hindi/Hinglish."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.3,
+        "max_tokens": 150
+    }
 
-    for model_name in ACTIVE_MODELS:
-        payload = {
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are NanoGPT, a sharp, precise, and helpful AI assistant created by Sumant. "
-                        "Provide accurate, direct answers in 1-2 sentences. "
-                        "If asked in Hindi or Hinglish, reply in natural, fluent Hindi/Hinglish."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": 0.3,
-            "max_tokens": 150
-        }
+    try:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
+        with urllib.request.urlopen(req, timeout=12) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            return res_data['choices'][0]['message']['content'].strip(), None
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode('utf-8')
+        return None, f"Model '{active_model}' failed: {err_msg}"
+    except Exception as e:
+        return None, f"Error: {str(e)}"
 
-        try:
-            req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
-            with urllib.request.urlopen(req, timeout=12) as response:
-                res_data = json.loads(response.read().decode('utf-8'))
-                return res_data['choices'][0]['message']['content'].strip(), None
-        except urllib.error.HTTPError as e:
-            err_msg = e.read().decode('utf-8')
-            last_error = f"{model_name} failed: {err_msg}"
-            continue
-        except Exception as e:
-            last_error = str(e)
-            continue
-
-    return None, last_error
-
-# 4. Auto-Save to SQLite Database
+# 5. Auto-Save to SQLite Database
 def save_to_memory(question, answer):
     try:
         with get_db() as conn:
@@ -131,7 +137,7 @@ def chat():
     if cached:
         return jsonify({"reply": cached})
 
-    # Naya sawal hone par LLM call
+    # Naya sawal hone par dynamic Groq model call
     reply, err = ask_groq(user_prompt)
     if reply:
         save_to_memory(user_prompt, reply)
