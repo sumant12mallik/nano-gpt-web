@@ -45,8 +45,8 @@ def get_cached_reply(user_query):
         pass
     return None
 
-# 3. Live Active Models Fetcher (Kabhi Decommission Error nahi aayega)
-def get_active_model():
+# 3. Valid Chat Model Finder (Guard/Whisper hatakar sirf real Chat LLM)
+def get_active_chat_model():
     url = "https://api.groq.com/openai/v1/models"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -56,18 +56,21 @@ def get_active_model():
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=5) as response:
             res_data = json.loads(response.read().decode('utf-8'))
-            models = [m['id'] for m in res_data.get('data', []) if 'whisper' not in m['id']]
-            # Pehla text-chat model chunein
-            if models:
-                return models[0]
+            models = [m['id'] for m in res_data.get('data', [])]
+            # Prompt-guard, whisper aur embed ko filter karein
+            for mid in models:
+                mid_lower = mid.lower()
+                if "guard" not in mid_lower and "whisper" not in mid_lower and "embed" not in mid_lower:
+                    if "llama" in mid_lower or "mixtral" in mid_lower or "gemma" in mid_lower:
+                        return mid
     except Exception as e:
-        print(f"Model list error: {e}")
-    # Fallback agar fetch na ho paye
+        print(f"Model fetch error: {e}")
+    
     return "llama-3.1-8b-instant"
 
-# 4. Groq API Call
+# 4. Groq Chat API Call
 def ask_groq(prompt):
-    active_model = get_active_model()
+    active_model = get_active_chat_model()
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -82,7 +85,7 @@ def ask_groq(prompt):
                 "role": "system",
                 "content": (
                     "You are NanoGPT, a sharp, precise, and helpful AI assistant created by Sumant. "
-                    "Provide accurate, direct answers in 1-2 sentences. "
+                    "Provide accurate, direct answers in 1-2 short sentences. "
                     "If asked in Hindi or Hinglish, reply in natural, fluent Hindi/Hinglish."
                 )
             },
@@ -102,7 +105,7 @@ def ask_groq(prompt):
             return res_data['choices'][0]['message']['content'].strip(), None
     except urllib.error.HTTPError as e:
         err_msg = e.read().decode('utf-8')
-        return None, f"Model '{active_model}' failed: {err_msg}"
+        return None, f"Model '{active_model}' error: {err_msg}"
     except Exception as e:
         return None, f"Error: {str(e)}"
 
@@ -132,12 +135,12 @@ def chat():
     if not user_prompt:
         return jsonify({"reply": "Kripya koi sawal poochhein."})
 
-    # Pehle memory check
+    # 1. Pehle memory check
     cached = get_cached_reply(user_prompt)
     if cached:
         return jsonify({"reply": cached})
 
-    # Naya sawal hone par dynamic Groq model call
+    # 2. Chat LLM call
     reply, err = ask_groq(user_prompt)
     if reply:
         save_to_memory(user_prompt, reply)
