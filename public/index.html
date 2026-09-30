@@ -1,48 +1,59 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="hi">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NanoGPT Workspace</title>
-  <link rel="stylesheet" href="/static/style.css">
-
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SumantX AI</title>
+    <!-- Public folder wali style.css ko link kiya gaya hai -->
+    <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+    <header>
+        <h2>SumantX AI</h2>
+    </header>
 
-  <!-- Top Navigation Bar -->
-  <header class="navbar">
-    <div class="logo-area">
-      <span class="logo-text">NanoGPT</span>
-      <span class="badge">Self-Trained LLM</span>
+    <div class="chat-container" id="chat">
+        <div class="msg bot">Namaste! Main SumantX AI hoon. Mujhse koi bhi sawaal puchiye!</div>
     </div>
-  </header>
 
-  <!-- Main Chat Conversation Screen -->
-  <main id="chat-container">
-    <div class="message ai">
-      <div class="sender-tag">NanoGPT</div>
-      <div class="bubble-text">Hello! Main scratch se bana AI hoon. Mujhse sawal puchhein!</div>
+    <div class="input-bar">
+        <input type="text" id="userInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendMsg()">
+        <button onclick="sendMsg()">Send</button>
     </div>
-  </main>
 
-  <!-- Bottom Message Input Area -->
-  <footer class="footer-input">
-    <div class="input-wrapper">
-      <input 
-        type="text" 
-        id="user-input" 
-        placeholder="Ask anything..." 
-        autocomplete="off"
-      />
-      <button id="send-btn" onclick="handleSend()">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-          <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-        </svg>
-      </button>
-    </div>
-  </footer>
+    <script>
+        async function sendMsg() {
+            const input = document.getElementById('userInput');
+            const chat = document.getElementById('chat');
+            const prompt = input.value.trim();
+            if (!prompt) return;
 
-  <script src="/static/script.js"></script>
+            // User message screen par show karein
+            chat.innerHTML += `<div class="msg user">${prompt}</div>`;
+            input.value = '';
+            chat.scrollTop = chat.scrollHeight;
 
+            // Loading indicator
+            const loading = document.createElement('div');
+            loading.className = 'msg bot';
+            loading.innerText = 'Soch raha hoon...';
+            chat.appendChild(loading);
+            chat.scrollTop = chat.scrollHeight;
+
+            try {
+                // Render Backend API call
+                const res = await fetch('https://nano-gpt-web.onrender.com/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: prompt })
+                });
+                const data = await res.json();
+                loading.innerText = data.reply;
+            } catch (err) {
+                loading.innerText = 'Render server se connect nahi ho pa raha hai. Kripya thoda intezaar karein.';
+            }
+            chat.scrollTop = chat.scrollHeight;
+        }
+    </script>
 </body>
 </html>
