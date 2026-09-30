@@ -2,39 +2,85 @@
 <html lang="hi">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>SumantX AI</title>
-    <!-- Public folder me rakhi style.css ka link -->
+    <!-- Public folder me rakhi style.css -->
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <div class="chat-container">
-        <!-- Header -->
-        <header class="chat-header">
-            <h2>SumantX AI</h2>
-        </header>
 
-        <!-- Messages Box -->
-        <div class="chat-box" id="chat-box">
-            <div class="message bot-message">
-                <span>Hello! Main SumantX AI hoon. Mujhse sawal puchhein!</span>
-            </div>
+    <!-- Header Navbar -->
+    <div class="navbar">
+        <div class="logo-area">
+            <span class="logo-text">SumantX AI</span>
+            <span class="badge">Online</span>
         </div>
+    </div>
 
-        <!-- Input Area -->
-        <form class="chat-input-area" id="chat-form" onsubmit="event.preventDefault();">
-            <input 
-                type="text" 
-                id="user-input" 
-                placeholder="Ask anything..." 
-                autocomplete="off"
-                required
-            >
-            <button type="submit" id="send-btn">&#10148;</button>
+    <!-- Chat Messages Screen -->
+    <div id="chat-container">
+        <div class="message ai">
+            <div class="sender-tag">SumantX AI</div>
+            <div>Hello! Main SumantX AI hoon. Mujhse sawal puchhein!</div>
+        </div>
+    </div>
+
+    <!-- Fixed Bottom Input -->
+    <div class="footer-input">
+        <form class="input-wrapper" id="chatForm">
+            <input type="text" id="userInput" placeholder="Ask anything..." autocomplete="off">
+            <button type="submit" id="sendBtn" aria-label="Send">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                </svg>
+            </button>
         </form>
     </div>
 
-    <!-- Public folder me rakhi script.js ka link -->
-    <script src="/script.js"></script>
+    <script>
+        const chatForm = document.getElementById('chatForm');
+        const userInput = document.getElementById('userInput');
+        const chatContainer = document.getElementById('chat-container');
+
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const prompt = userInput.value.trim();
+            if (!prompt) return;
+
+            // 1. User Message render karein
+            const userMsg = document.createElement('div');
+            userMsg.className = 'message user';
+            userMsg.innerText = prompt;
+            chatContainer.appendChild(userMsg);
+
+            userInput.value = '';
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            // 2. Bot Thinking Indicator
+            const botMsg = document.createElement('div');
+            botMsg.className = 'message ai';
+            botMsg.innerHTML = '<div class="sender-tag">SumantX AI</div><div>Thinking...</div>';
+            chatContainer.appendChild(botMsg);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            // 3. Render Backend Call
+            try {
+                const res = await fetch('https://nano-gpt-web.onrender.com/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: prompt })
+                });
+
+                if (!res.ok) throw new Error('Network error');
+
+                const data = await res.json();
+                botMsg.innerHTML = `<div class="sender-tag">SumantX AI</div><div>${data.reply || 'Koi response nahi mila.'}</div>`;
+            } catch (err) {
+                botMsg.innerHTML = '<div class="sender-tag">SumantX AI</div><div>Backend connect nahi ho pa raha hai. Kripya 20-30 second baad try karein.</div>';
+            }
+
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        });
+    </script>
 </body>
 </html>
