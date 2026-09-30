@@ -1,11 +1,12 @@
 import math
 import random
+import os
 from collections import Counter
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # Browser se aane wali requests allow karne ke liye
+CORS(app)
 
 # 1. Dataset
 text_data = [
@@ -62,7 +63,7 @@ for epoch in range(1, epochs + 1):
                 grad -= 1.0
             W[x][j] -= learning_rate * grad
 
-print("--- AI Brain Ready on Port 5000! ---")
+print("--- AI Brain Ready! ---")
 
 # 3. Response Engine
 def generate_reply(user_text, max_new_words=10, rep_penalty=1.4, top_k=2):
@@ -78,14 +79,12 @@ def generate_reply(user_text, max_new_words=10, rep_penalty=1.4, top_k=2):
         x = word_to_ix[last_word]
         logits = list(W[x])
         
-        # Novelty + Penalty
         for j in range(vocab_size):
             logits[j] += 0.2 * novelty_bonus[j]
         for w in set(generated[-3:]):
             if w in word_to_ix:
                 logits[word_to_ix[w]] /= rep_penalty
                 
-        # Sampling
         probs = softmax(logits)
         indexed = sorted(list(enumerate(probs)), key=lambda item: item[1], reverse=True)[:top_k]
         top_indices = [item[0] for item in indexed]
@@ -100,7 +99,12 @@ def generate_reply(user_text, max_new_words=10, rep_penalty=1.4, top_k=2):
         
     return " ".join(generated[len(words):])
 
-# 4. API Route
+# 4. Frontend Route (Homepage UI)
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+# 5. API Route (Chat Backend)
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.get_json()
@@ -115,4 +119,6 @@ def chat():
     return jsonify({"reply": bot_reply})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
+    
